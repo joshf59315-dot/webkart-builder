@@ -47,8 +47,7 @@ public class MainActivity extends Activity {
     private ProgressBar topBar;
     private long startedAt;
     private boolean splashHidden;
-    private PermissionRequest pendingWeb;
-    private List<String> pendingWebResources = new ArrayList<>();
+    private final List<PermissionRequest> pendingWeb = new ArrayList<>();
     private GeolocationPermissions.Callback geoCallback;
     private String geoOrigin;
     private ValueCallback<Uri[]> fileCallback;
@@ -108,7 +107,7 @@ public class MainActivity extends Activity {
             public void onPermissionRequest(PermissionRequest request) { runOnUiThread(() -> handleWebPermission(request)); }
 
             @Override
-            public void onPermissionRequestCanceled(PermissionRequest request) { if (request == pendingWeb) pendingWeb = null; }
+            public void onPermissionRequestCanceled(PermissionRequest request) { runOnUiThread(() -> pendingWeb.remove(request)); }
 
             @Override
             public void onGeolocationPermissionsShowPrompt(String origin, GeolocationPermissions.Callback callback) { handleGeo(origin, callback); }
@@ -241,21 +240,32 @@ public class MainActivity extends Activity {
     }
 
     // Website camera/microphone access is granted only after the user accepts Android's own prompt.
+    // Several requests can arrive together (voice SDKs retry); queue them instead of denying earlier ones.
     private void handleWebPermission(PermissionRequest request) {
-        List<String> resources = new ArrayList<>();
         List<String> missing = new ArrayList<>();
+        boolean any = false;
         for (String resource : request.getResources()) {
             String permission = androidPermissionFor(resource);
             if (permission == null || !declared(permission)) continue;
-            resources.add(resource);
+            any = true;
             if (!granted(permission) && !missing.contains(permission)) missing.add(permission);
         }
-        if (resources.isEmpty()) { request.deny(); return; }
-        if (missing.isEmpty()) { request.grant(resources.toArray(new String[0])); return; }
-        if (pendingWeb != null) pendingWeb.deny();
-        pendingWeb = request;
-        pendingWebResources = resources;
-        requestPermissions(missing.toArray(new String[0]), REQ_WEB);
+        if (!any) { request.deny(); return; }
+        if (missing.isEmpty()) { answerWeb(request); return; }
+        boolean alreadyAsking = !pendingWeb.isEmpty();
+        pendingWeb.add(request);
+        if (!alreadyAsking) requestPermissions(missing.toArray(new String[0]), REQ_WEB);
+    }
+
+    private void answerWeb(PermissionRequest request) {
+        List<String> allowed = new ArrayList<>();
+        for (String resource : request.getResources()) {
+            String permission = androidPermissionFor(resource);
+            if (permission != null && declared(permission) && granted(permission)) allowed.add(resource);
+        }
+        try {
+            if (allowed.isEmpty()) request.deny(); else request.grant(allowed.toArray(new String[0]));
+        } catch (Exception ignored) { }
     }
 
     private void handleGeo(String origin, GeolocationPermissions.Callback callback) {
@@ -277,14 +287,10 @@ public class MainActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int code, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(code, permissions, results);
-        if (code == REQ_WEB && pendingWeb != null) {
-            List<String> allowed = new ArrayList<>();
-            for (String resource : pendingWebResources) {
-                String permission = androidPermissionFor(resource);
-                if (permission != null && granted(permission)) allowed.add(resource);
-            }
-            if (allowed.isEmpty()) pendingWeb.deny(); else pendingWeb.grant(allowed.toArray(new String[0]));
-            pendingWeb = null;
+        if (code == REQ_WEB) {
+            List<PermissionRequest> waiting = new ArrayList<>(pendingWeb);
+            pendingWeb.clear();
+            for (PermissionRequest request : waiting) answerWeb(request);
         } else if (code == REQ_GEO && geoCallback != null) {
             boolean ok = granted(Manifest.permission.ACCESS_FINE_LOCATION) || granted(Manifest.permission.ACCESS_COARSE_LOCATION);
             geoCallback.invoke(geoOrigin, ok, false);
