@@ -77,10 +77,14 @@ perms = [p for p in cfg.get("manifestPermissions", []) if allowed.fullmatch(p)]
 for base in ("android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE"):
     if base not in perms:
         perms.insert(0, base)
-perm_xml = "\n".join('    <uses-permission android:name="%s" />' % p for p in perms)
 features = ""
+if "android.permission.RECORD_AUDIO" in perms and "android.permission.MODIFY_AUDIO_SETTINGS" not in perms:
+    perms.append("android.permission.MODIFY_AUDIO_SETTINGS")  # WebView mic (WebRTC) needs this
+if "android.permission.RECORD_AUDIO" in perms:
+    features += '    <uses-feature android:name="android.hardware.microphone" android:required="false" />\n'
+perm_xml = "\n".join('    <uses-permission android:name="%s" />' % p for p in perms)
 if "android.permission.CAMERA" in perms:
-    features = '    <uses-feature android:name="android.hardware.camera" android:required="false" />\n'
+    features += '    <uses-feature android:name="android.hardware.camera" android:required="false" />\n'
 write("app/src/main/AndroidManifest.xml", """<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 %s
